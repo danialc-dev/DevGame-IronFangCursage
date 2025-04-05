@@ -2,10 +2,17 @@ local anim = require 'anim8'
 
 local background
 
+--set das imagens e animações de cada sprite
+local imagemEstatico, animacaoEstatico
 local imagemDefender, animacaoDefender
 local imagemAndar, animacaoAndar
 local imagemCorrer, animacaoCorrer
 local imagemPular, animacaoPular
+local imagemAtaque1, animacaoAtaque1
+
+-- variaveis de auxilio do ataque
+local tempoAtaque = 0
+local duracaoAtaque = 0.7
 
 local posX = 100
 local posY = 230  -- Aqui você controla a posição vertical
@@ -15,18 +22,31 @@ local emChao = true  -- Variável para verificar se o personagem está no chão
 local puloVelocidade = -350  -- A velocidade do pulo (ajuste para pular mais alto)
 local gravidade = 800  -- A aceleração da gravidade
 
-local cameraX = 0 --Vamos criar a camera para acompanhar o personagem com forme ele anda 
+local cameraX = 0 --criar a camera para acompanhar o personagem com forme ele anda 
 
 function love.load()
     -- setando a imagem do background
     background = love.graphics.newImage("insumos/Background/background.png")
     larguraBg = background:getWidth()
 
+    -- função para espelhar os sprites
+    function desenharSprite(animacao, imagem, x, y, direcao, cameraX, offsetX)
+        local escalaX = direcao and 2 or -2
+        local offset = direcao and offsetX or (offsetX - 90)  -- <-- Ajuste fino 
+        animacao:draw(imagem, x - cameraX, y, 0, escalaX, 2, offset, 0)
+    end
+
+    --Pegando a animação estatica do personagem
+    imagemEstatico = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Idle1.png")
+    local colunasEstatico = imagemEstatico:getWidth() / 72  -- Calcula quantas colunas tem
+    local estatico = anim.newGrid(72, 86, imagemEstatico:getWidth(), imagemEstatico:getHeight())
+    animacaoEstatico = anim.newAnimation(estatico('1-'..math.floor(colunasEstatico), 1), 0.08)
+
     -- Pegando a animação de andar
     imagemAndar = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Walk.png")
-    local colunasWalk = imagemAndar:getWidth() / 72  -- Calcula quantas colunas tem
-    local walk = anim.newGrid(72, 86, imagemAndar:getWidth(), imagemAndar:getHeight())
-    animacaoAndar = anim.newAnimation(walk('1-5', 1), 0.1)
+    local colunasWalk = imagemAndar:getWidth() / 75  -- Calcula quantas colunas tem
+    local walk = anim.newGrid(75, 86, imagemAndar:getWidth(), imagemAndar:getHeight())
+    animacaoAndar = anim.newAnimation(walk('1-5', 1), 0.13)
 
     -- Pegando a animação de correr
     imagemCorrer = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Run.png")
@@ -45,6 +65,12 @@ function love.load()
     local colunasDefend = imagemDefender:getWidth() / 72  -- Ajuste aqui para garantir que você tenha o número certo de colunas
     local defend = anim.newGrid(72, 86, imagemDefender:getWidth(), imagemDefender:getHeight()) -- Certifique-se de usar as dimensões corretas
     animacaoDefender = anim.newAnimation(defend('1-'..math.floor(colunasDefend), 1), 0.1)
+
+    -- Pegando a imagem do ataque 1
+    imagemAtaque1 = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Attack1.png")
+    local colunasAtaque1 = imagemAtaque1:getWidth() / 86  -- Ajuste aqui para garantir que você tenha o número certo de colunas
+    local ataque1 = anim.newGrid(86, 86, imagemAtaque1:getWidth(), imagemAtaque1:getHeight()) -- Certifique-se de usar as dimensões corretas
+    animacaoAtaque1 = anim.newAnimation(ataque1('1-'..math.floor(colunasAtaque1), 1), 0.12)
     
 end
 
@@ -73,15 +99,19 @@ function love.update(dt)
     end
 
     -- Verifica o estado de movimento e impede a movimentação enquanto estiver defendendo
-    if estado ~= "defender" then
+
+    if estado ~= "defender" and estado ~= "atacar" then
         if love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then
             estado = "correr"
             velocidade = 240
-        else
+        elseif love.keyboard.isDown("a") or love.keyboard.isDown("d") then
             estado = "andar"
+            velocidade = 140
+        else
+            estado = "estatico"
         end
-
-        if love.keyboard.isDown('a') then
+    
+            if love.keyboard.isDown('a') then
             posX = posX - velocidade * dt
             cameraX = cameraX - velocidade * dt
             direcao = false
@@ -95,35 +125,48 @@ function love.update(dt)
         end
     end
 
-    -- fazendo a animação de defender
-    if love.mouse.isDown(2) then
+    -- fazendo a animação do ataque 1
+    if tempoAtaque > 0 then
+        tempoAtaque = tempoAtaque - dt
+        estado = "atacar"
+    elseif not emChao then
+        estado = "pular"
+    elseif love.mouse.isDown(2) then
         estado = "defender"
+    elseif love.mouse.isDown(1) then
+        estado = "atacar"
+        tempoAtaque = duracaoAtaque
+        animacaoAtaque1:gotoFrame(1)
+    elseif love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then
+        estado = "correr"
+    elseif love.keyboard.isDown("a") or love.keyboard.isDown("d") then
+        estado = "andar"
     else
-        -- Caso contrário, usa o comportamento normal (andar ou correr)
-        if love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then
-            estado = "correr"
-        else
-            estado = "andar"
-        end
+        estado = "estatico"
     end
 
+   
+
     -- Atualiza a animação com base no estado do personagem
-    if movendo then
-        if estado == "defender" then
-            animacaoDefender:update(dt)
-        elseif estado == "andar" then
-            animacaoAndar:update(dt)
-        elseif estado == "correr" then
-            animacaoCorrer:update(dt)
-        end
+    if estado == "estatico" then
+        animacaoEstatico:update(dt)
+    elseif estado == "defender" then
+        animacaoDefender:update(dt)
+    elseif estado == "atacar" then
+        animacaoAtaque1:update(dt)
     elseif not emChao then
-        -- Atualiza a animação de pulo quando estiver no ar
         animacaoPular:update(dt)
+    elseif estado == "andar" then
+        animacaoAndar:update(dt)
+    elseif estado == "correr" then
+        animacaoCorrer:update(dt)
     end
 
     -- Atualiza a posição da camera quando o personagem andar
     cameraX = posX - love.graphics.getWidth() / 2
+
 end
+
 
 
 function love.draw()
@@ -141,26 +184,15 @@ function love.draw()
 
     -- Se estiver no ar, usa a animação de pular
     if estado == "defender" then
-        -- Inverte a animação de defesa se a direção for para a esquerda
-        if not direcao then
-            animacaoDefender:draw(imagemDefender, posX - cameraX, posY, 0, -2, 2, 90, 0)  -- Inverte
-        else
-            animacaoDefender:draw(imagemDefender, posX - cameraX, posY, 0, 2, 2, 90, 0)  -- Normal
-        end
+        desenharSprite(animacaoDefender, imagemDefender, posX, posY, direcao, cameraX, 90)
+    elseif estado == "estatico" then
+        desenharSprite(animacaoEstatico, imagemEstatico, posX, posY, direcao, cameraX, 90)
+    elseif estado == "atacar" then
+        desenharSprite(animacaoAtaque1, imagemAtaque1, posX, posY, direcao, cameraX, 90)
     elseif not emChao then
-        -- Se estiver no ar, usa a animação de pular
-        if not direcao then
-            animacaoPular:draw(imagemPular, posX - cameraX, posY, 0, -2, 2, 90, 0)  -- Inverte
-        else
-            animacaoPular:draw(imagemPular, posX - cameraX, posY, 0, 2, 2, 90, 0)  -- Normal
-        end
+        desenharSprite(animacaoPular, imagemPular, posX, posY, direcao, cameraX, 90)
     else
-        -- Se estiver andando ou correndo
-        if direcao then
-            animacao:draw(imagem, posX - cameraX, posY, 0, 2, 2, 90, 0)
-        else
-            animacao:draw(imagem, posX - cameraX, posY, 0, -2, 2, 90, 0)
-        end
+        desenharSprite(animacao, imagem, posX, posY, direcao, cameraX, 90)
     end
 end
 
