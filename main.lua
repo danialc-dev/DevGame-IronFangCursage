@@ -2,13 +2,16 @@ local anim = require 'anim8'
 
 local background
 
---set das imagens e animações de cada sprite
+--set das imagens e animações de cada sprite do personagem principal
 local imagemEstatico, animacaoEstatico
 local imagemDefender, animacaoDefender
 local imagemAndar, animacaoAndar
 local imagemCorrer, animacaoCorrer
 local imagemPular, animacaoPular
 local imagemAtaque1, animacaoAtaque1
+local imagemAtaque2, animacaoAtaque2
+local imagemMorte, animacaoMorte
+local imagemDano, animacaoDano
 
 -- variaveis de auxilio do ataque
 local tempoAtaque = 0
@@ -67,11 +70,28 @@ function love.load()
     animacaoDefender = anim.newAnimation(defend('1-'..math.floor(colunasDefend), 1), 0.1)
 
     -- Pegando a imagem do ataque 1
-    imagemAtaque1 = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Attack1.png")
-    local colunasAtaque1 = imagemAtaque1:getWidth() / 86  -- Ajuste aqui para garantir que você tenha o número certo de colunas
-    local ataque1 = anim.newGrid(86, 86, imagemAtaque1:getWidth(), imagemAtaque1:getHeight()) -- Certifique-se de usar as dimensões corretas
+    imagemAtaque1 = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Attack3.png")
+    local colunasAtaque1 = imagemAtaque1:getWidth() / 102  -- Ajuste aqui para garantir que você tenha o número certo de colunas
+    local ataque1 = anim.newGrid(102, 86, imagemAtaque1:getWidth(), imagemAtaque1:getHeight()) -- Certifique-se de usar as dimensões corretas
     animacaoAtaque1 = anim.newAnimation(ataque1('1-'..math.floor(colunasAtaque1), 1), 0.12)
-    
+
+    --Pegando a imagem do ataque 2
+    imagemAtaque2 = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Attack1.png")
+    local colunasAtaque2 = imagemAtaque2:getWidth() / 86  -- Ajuste aqui para garantir que você tenha o número certo de colunas
+    local ataque2 = anim.newGrid(86, 86, imagemAtaque2:getWidth(), imagemAtaque2:getHeight()) -- Certifique-se de usar as dimensões corretas
+    animacaoAtaque2 = anim.newAnimation(ataque2('1-'..math.floor(colunasAtaque2), 1), 0.18)
+
+    --Carregando a imagem de morte (vai ser usada na implementação de vida = 0 do personagem)
+    imagemMorte = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Dead.png")
+    local colunasMorte = imagemMorte:getWidth() / 80  -- Ajuste aqui para ga2rantir que você tenha o número certo de colunas
+    local morte = anim.newGrid(80, 86, imagemMorte:getWidth(), imagemMorte:getHeight()) -- Certifique-se de usar as dimensões corretas
+    animacaoMorte = anim.newAnimation(morte('1-'..math.floor(colunasMorte), 1), 0.18)
+
+    --Carregando a imagem de dano (vai ser usada na implementação de dano ao personagem)
+    imagemDano = love.graphics.newImage("insumos/Sprite_Person_princ/Knight_1/Hurt.png")
+    local colunasDano = imagemDano:getWidth() / 70  -- Ajuste aqui para garantir que você tenha o número certo de colunas
+    local dano = anim.newGrid(70, 86, imagemDano:getWidth(), imagemDano:getHeight()) -- Certifique-se de usar as dimensões corretas
+    animacaoDano = anim.newAnimation(dano('1-'..math.floor(colunasDano), 1), 0.18)
 end
 
 
@@ -100,8 +120,8 @@ function love.update(dt)
 
     -- Verifica o estado de movimento e impede a movimentação enquanto estiver defendendo
 
-    if estado ~= "defender" and estado ~= "atacar" then
-        if love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then
+    if estado ~= "defender" and estado ~= "atacar" and estado ~= "atacar2" then
+        if (love.keyboard.isDown("a") or love.keyboard.isDown("d")) and love.keyboard.isDown("lshift") then
             estado = "correr"
             velocidade = 240
         elseif love.keyboard.isDown("a") or love.keyboard.isDown("d") then
@@ -129,15 +149,20 @@ function love.update(dt)
     if tempoAtaque > 0 then
         tempoAtaque = tempoAtaque - dt
         estado = "atacar"
+    elseif tempoAtaque > 0 then
+        tempoAtaque = tempoAtaque - dt
+        estado = "atacar2"
     elseif not emChao then
         estado = "pular"
+    elseif love.keyboard.isDown("e") then
+        estado = "atacar2"
     elseif love.mouse.isDown(2) then
         estado = "defender"
     elseif love.mouse.isDown(1) then
         estado = "atacar"
         tempoAtaque = duracaoAtaque
         animacaoAtaque1:gotoFrame(1)
-    elseif love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then
+    elseif (love.keyboard.isDown("a") or love.keyboard.isDown("d")) and love.keyboard.isDown("lshift") then
         estado = "correr"
     elseif love.keyboard.isDown("a") or love.keyboard.isDown("d") then
         estado = "andar"
@@ -154,6 +179,8 @@ function love.update(dt)
         animacaoDefender:update(dt)
     elseif estado == "atacar" then
         animacaoAtaque1:update(dt)
+    elseif estado == "atacar2" then
+        animacaoAtaque2:update(dt)
     elseif not emChao then
         animacaoPular:update(dt)
     elseif estado == "andar" then
@@ -189,6 +216,8 @@ function love.draw()
         desenharSprite(animacaoEstatico, imagemEstatico, posX, posY, direcao, cameraX, 90)
     elseif estado == "atacar" then
         desenharSprite(animacaoAtaque1, imagemAtaque1, posX, posY, direcao, cameraX, 90)
+    elseif estado == "atacar2" then
+        desenharSprite(animacaoAtaque2, imagemAtaque2, posX, posY, direcao, cameraX, 90)
     elseif not emChao then
         desenharSprite(animacaoPular, imagemPular, posX, posY, direcao, cameraX, 90)
     else
