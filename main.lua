@@ -1,5 +1,8 @@
 local anim = require 'anim8'
 
+-- ativar/desativar o DEBUG
+local debugMode = false  -- Mude para false para desativar
+
 -- Variáveis para o game OVER
 local deathSound -- Variável para o som de morte
 local deathSoundFade = 0
@@ -14,6 +17,15 @@ local buttons = {
     start = {x = 0, y = 0, width = 200, height = 50, text = "Iniciar Jogo"},
     exit = {x = 0, y = 0, width = 200, height = 50, text = "Sair"}
 }
+
+local italicFont = love.graphics.newFont("insumos/Fontes/Roboto-Italic.ttf", 14)
+
+--sounds
+local coinSound
+love.audio.setVolume(0.2)
+
+-- Variavrel lobo
+local LobosController = {}
 
 -- Estados do jogo
 local gameStates = {
@@ -38,6 +50,70 @@ function GameObject:new(o)
     return o
 end
 
+-- classe para criar a particula e suas caracteristicas
+-- Adicione isso no início do arquivo, junto com as outras declarações
+local Coin = GameObject:new()
+function Coin:new(o)
+    o = o or {
+        x = 0,
+        y = 0,
+        value = 10, -- Valor em pontos
+        collected = false,
+        animation = nil,
+        image = nil,
+        active = true,
+        canBeCollected = false,  
+        spawnTime = 0,         
+        collectDelay = 0.5
+    }
+    setmetatable(o, self)
+    self.__index = self
+    return o
+end
+
+function Coin:load()
+    self.image = love.graphics.newImage("insumos/Sprite_Particula/Particula2.png")
+    local grid = anim.newGrid(35, 40, self.image:getWidth(), self.image:getHeight())
+    local frames = math.floor(self.image:getWidth() / 36)
+    self.animation = anim.newAnimation(grid('1-'..frames, 1), 0.2)
+end
+
+function Coin:update(dt)
+    if not self.collected and self.active then
+        self.spawnTime = self.spawnTime + dt
+        
+        -- Habilita a coleta após o delay
+        if self.spawnTime >= self.collectDelay then
+            self.canBeCollected = true
+        end
+        
+        self.animation:update(dt)
+    end
+end
+
+function Coin:draw(cameraX)
+    if not self.collected and self.active then
+        -- Efeito de fade-in (opcional)
+        local alpha = math.min(1, self.spawnTime / self.collectDelay)  -- Vai de 0 a 1
+        love.graphics.setColor(1, 1, 1, alpha)  -- Aplica transparência
+        
+        -- Desenha a moeda
+        local drawY = self.y - 18 + 10  -- Ajuste de posição (como antes)
+        self.animation:draw(self.image, self.x - cameraX - 18, drawY, 0, 1.3, 1.3)
+        
+        -- Reseta cor para evitar afetar outros elementos
+        love.graphics.setColor(1, 1, 1, 1)
+        
+        -- Debug (se necessário)
+        if debugMode then
+            love.graphics.setColor(1, 1, 0, 0.5 * alpha)  -- Hitbox semi-transparente
+            love.graphics.rectangle("line", self.x - cameraX - 18, drawY, 54, 54)
+            love.graphics.setColor(1, 1, 1)
+        end
+    end
+end
+
+
 -- Classe do Personagem
 local Personagem = GameObject:new()
 function Personagem:new(o)
@@ -61,9 +137,25 @@ function Personagem:new(o)
         loboDanoCooldown = false,
         tempoLoboDanoCooldown = 0,
         deathAnimationComplete = false,
+        danoAplicado = false,  -- Flag para controlar se o dano já foi aplicado nesse frame
+        power = 0,
+        maxPower = 100,
     }
     self.__index = self
     return setmetatable(o, self)
+end
+
+--função para receber o poder dado pelas coins
+function Personagem:addPower(amount)
+    self.power = math.min(self.power + amount, self.maxPower)
+    if coinSound then
+        coinSound:stop()
+        coinSound:play()
+    end
+    if self.power >= self.maxPower then
+        -- Aqui você pode adicionar lógica para quando o poder estiver cheio
+        print("Poder máximo alcançado! Pronto para enfrentar o BOSS!")
+    end
 end
 
 function Personagem:load()
@@ -93,7 +185,7 @@ function Personagem:load()
 
     self.imagemAtaque2 = love.graphics.newImage("insumos/Sprite_Person_princ/Spritesheet 128/Knight_1/Attack1.png")
     local ataque2 = anim.newGrid(128, 128, self.imagemAtaque2:getWidth(), self.imagemAtaque2:getHeight())
-    self.animacaoAtaque2 = anim.newAnimation(ataque2('1-'..math.floor(self.imagemAtaque2:getWidth() / 127), 1), 0.14)
+    self.animacaoAtaque2 = anim.newAnimation(ataque2('1-'..math.floor(self.imagemAtaque2:getWidth() / 127), 1), 0.20)
 
     self.imagemMorte = love.graphics.newImage("insumos/Sprite_Person_princ/Spritesheet 128/Knight_1/Dead.png")
     local morte = anim.newGrid(128, 128, self.imagemMorte:getWidth(), self.imagemMorte:getHeight())
@@ -110,39 +202,41 @@ end
 
 function Personagem:frameDeDano()
     if self.estado == "atacar" then
+        print("Frame de ataque normal: "..self.animacaoAtaque1.position)
         return self.animacaoAtaque1.position >= 3 and self.animacaoAtaque1.position <= 5
     elseif self.estado == "atacar2" then
+        print("Frame de ataque forte: "..self.animacaoAtaque2.position)
         return self.animacaoAtaque2.position >= 2 and self.animacaoAtaque2.position <= 4
     end
     return false
 end
 
 function Personagem:colisaoComLobo()
-    if not self.lobo or self.lobo.estado == "morte" then return false end
+    local lobosAtivos = self.lobosController:getLobosAtivos()  -- Note a mudança aqui
     
-    -- Hitbox do personagem durante o ataque
-    local ataqueLargura = 100
-    local ataqueAltura = 150
-    local ataqueOffsetX = self.direcao and 60 or -60
-    
-    -- Hitbox do lobo
-    local loboLargura = 60
-    local loboAltura = 40
-    local loboOffsetY = 30
-    
-    -- Posição da hitbox de ataque
-    local ataqueX = self.posX + ataqueOffsetX
-    local ataqueY = self.posY - 20
-    
-    -- Posição da hitbox do lobo
-    local loboX = self.lobo.x
-    local loboY = self.lobo.y + loboOffsetY
-    
-    -- Verifica colisão
-    return ataqueX < loboX + loboLargura and
+    for _, lobo in ipairs(lobosAtivos) do
+        -- Hitbox do ataque
+        local ataqueLargura = 100
+        local ataqueAltura = 60
+        local ataqueOffsetX = self.direcao and 70 or -30
+        local ataqueX = self.posX + ataqueOffsetX
+        local ataqueY = self.posY + 180
+        
+        -- Hitbox do lobo (ajustada)
+        local loboLargura = 70
+        local loboAltura = 50
+        local loboX = lobo.x
+        local loboY = lobo.y - 10
+        
+        -- Verificação de colisão
+        if ataqueX < loboX + loboLargura and
            ataqueX + ataqueLargura > loboX and
            ataqueY < loboY + loboAltura and
-           ataqueY + ataqueAltura > loboY
+           ataqueY + ataqueAltura > loboY then
+            return lobo
+        end
+    end
+    return nil
 end
 
 function Personagem:update(dt)
@@ -164,43 +258,35 @@ function Personagem:update(dt)
             end
         end
     end
-    
-    -- Atualiza o cooldown do dano ao lobo
-    if self.loboDanoCooldown then
-        self.tempoLoboDanoCooldown = self.tempoLoboDanoCooldown - dt
-        if self.tempoLoboDanoCooldown <= 0 then
-            self.loboDanoCooldown = false
-        end
-    end
-    
+
     -- Verificação de morte
     if self.vida <= 0 and not self.morreu then
         self.morreu = true
         self.estado = "morte"
         self.animacaoMorte:gotoFrame(1)
-        love.audio.play(deathSound) -- Toca o som de morte
-        self.deathAnimationComplete = false -- Flag para controlar término da animação
+        love.audio.play(deathSound)
+        self.deathAnimationComplete = false
     end
-    
-    -- Se estiver morto
+
+    -- Se estiver morto, apenas atualiza a animação
     if self.morreu then
-        -- Atualiza animação se ainda não terminou
         if not self.deathAnimationComplete then
             self.animacaoMorte:update(dt)
             if self.animacaoMorte.position == #self.animacaoMorte.frames then
-                self.deathAnimationComplete = true -- Marca animação como completa
+                self.deathAnimationComplete = true
             end
         end
         return
     end
-    
+
     -- Pulo
     if love.keyboard.isDown('space') and self.emChao and self.estado ~= "morte" then
         self.estado = "pular"
         self.emChao = false
         self.puloVelocidade = -350
     end
-    
+
+    -- Gravidade e movimento no ar
     if not self.emChao then
         self.posY = self.posY + self.puloVelocidade * dt
         self.puloVelocidade = self.puloVelocidade + self.gravidade * dt
@@ -214,10 +300,11 @@ function Personagem:update(dt)
         end
     end
 
-    -- Condicional para atualizar o estado de movimento ou ataque
+    -- Controle de estados (ataque, defesa, movimento)
     if self.defendendo then
         self.estado = "defender"
     elseif self.estado ~= "dano" and self.estado ~= "morte" and self.estado ~= "pular" then
+        -- Defesa com botão direito do mouse
         if love.mouse.isDown(2) and not self.defendendo and self.estado ~= "atacar" and self.estado ~= "atacar2" then
             self:iniciarDefesa()
         end
@@ -226,47 +313,43 @@ function Personagem:update(dt)
         if love.mouse.isDown(1) and self.estado ~= "atacar" and self.estado ~= "atacar2" then
             self.estado = "atacar"
             self.animacaoAtaque1:gotoFrame(1)
+            self.danoAplicado = false  -- Reset do flag de dano
         end
-    
-        -- Ataque com a tecla "E"
-        if love.keyboard.isDown("e") and self.estado ~= "atacar" and self.estado ~= "atacar2" then
-            self.estado = "atacar2"
-            self.animacaoAtaque2:gotoFrame(1)
-        end
-    
-        -- Verificação de colisão e dano ao lobo
-        if self:estaAtacando() and self:frameDeDano() and not self.loboDanoCooldown then
-            if self:colisaoComLobo() and self.lobo.podeTomarDano then
-                if self.estado == "atacar" then
-                    self.lobo:tomarDano(20)
-                elseif self.estado == "atacar2" then
-                    self.lobo:tomarDano(40)
-                end
-                self.loboDanoCooldown = true
-                self.tempoLoboDanoCooldown = 0.3
-            end
-        end       
-        
-        -- Movimento normal
-        if self.estado ~= "atacar" and self.estado ~= "atacar2" then
+
+        -- Movimento normal (andar/correr)
+        if not self:estaAtacando() and not self.defendendo then
             if love.keyboard.isDown('a') or love.keyboard.isDown('d') then
                 if love.keyboard.isDown("lshift") then
                     self.estado = "correr"
                     self.velocidade = 200
-                    self.direcao = not love.keyboard.isDown("a")
                 else
                     self.estado = "andar"
                     self.velocidade = 140
-                    self.direcao = not love.keyboard.isDown("a")
                 end
+                self.direcao = not love.keyboard.isDown("a")
             else
                 self.estado = "estatico"
             end
         end
     end
 
-    -- Movimentação
-    if self.estado ~= "dano" and self.estado ~= "morte" then
+    -- SISTEMA DE DANO CONTRA LOBOS (PARTE CRÍTICA)
+    if self:estaAtacando() and self:frameDeDano() and not self.danoAplicado then
+        local lobo = self:colisaoComLobo()
+        if lobo and lobo.podeTomarDano then
+            local dano = (self.estado == "atacar") and 20 or 40  -- Dano diferente por tipo de ataque
+            lobo:tomarDano(dano)
+            self.danoAplicado = true  -- Evita múltiplos hits em um único ataque
+            if debugMode then
+                print(string.format("Dano aplicado: %d (Vida do lobo: %d)", dano, lobo.vida))
+            end
+        end
+    elseif not self:estaAtacando() then
+        self.danoAplicado = false  -- Reset do flag quando o ataque termina
+    end
+
+    -- Movimento horizontal (se não estiver tomando dano ou morto)
+    if self.estado ~= "dano" and self.estado ~= "morte" and not self:estaAtacando() and not self.defendendo then
         if love.keyboard.isDown("a") then
             self.posX = self.posX - self.velocidade * dt
         elseif love.keyboard.isDown("d") then
@@ -274,11 +357,11 @@ function Personagem:update(dt)
         end
     end
 
-    -- Atualiza as animações
+    -- Atualização das animações (sem alterações)
     if self.estado == "dano" then
         self.animacaoDano:update(dt)
     elseif self.estado == "morte" then
-        self.animacaoMorte:update(dt)  
+        self.animacaoMorte:update(dt)
     elseif self.estado == "estatico" then
         self.animacaoEstatico:update(dt)
     elseif self.estado == "defender" then
@@ -290,8 +373,9 @@ function Personagem:update(dt)
         end
     elseif self.estado == "atacar2" then
         self.animacaoAtaque2:update(dt)
-        if self.animacaoAtaque2.position == #self.animacaoAtaque2.frames then
+        if self.animacaoAtaque2.status == "finished" then
             self.estado = "estatico"
+            self.animacaoAtaque2:gotoFrame(1) -- reset para o próximo uso
         end
     elseif not self.emChao then
         self.animacaoPular:update(dt)
@@ -371,10 +455,183 @@ function Lobo:new(o)
         vida = 80,
         spawnado = false,
         tempoHurt = 0,
-        podeTomarDano = true
+        podeTomarDano = true,
+        ativo = false,
+        tempoMorte = 0,
+        tempoParaDesaparecer = 1.5,
+        velocidade = 120, -- Adiciona velocidade base
     }
     self.__index = self
     return setmetatable(o, self)
+end
+
+-- Sistema de controle de lobos
+function LobosController:new()
+    local o = {
+        lobos = {},
+        coins = {},
+        tempoEntreSpawns = 6,
+        tempoUltimoSpawn = 0,
+        maxLobosAtivos = 3,
+        lobosParaSpawnar = {},
+        ondaAtual = 1,  -- Adiciona esta linha para controlar a onda atual
+        tempoEntreOndas = 10  -- Tempo entre ondas em segundos
+    }
+    setmetatable(o, self)
+    self.__index = self
+    return o
+end
+
+--spawn de coins
+function LobosController:spawnCoin(x, y)
+    local newCoin = Coin:new()
+    newCoin:load()
+    newCoin.x = x
+    newCoin.y = y - 17 -- Ajuste para aparecer um pouco acima do lobo
+    table.insert(self.coins, newCoin)
+    return newCoin
+end
+
+--chegar colisao com as coins
+local function checkCollision(obj1, obj2)
+    -- Ajuste para os tamanhos reais (considerando a escala 1.5 da moeda)
+    local obj1Width, obj1Height = 50, 160 
+    local obj2Width, obj2Height = 54, 54   
+    
+    -- Ajuste das posições considerando o offset
+    local coinX = obj2.x - 18  
+    local coinY = obj2.y - 18
+    
+    return obj1.posX < coinX + obj2Width and
+           obj1.posX + obj1Width > coinX and
+           obj1.posY < coinY + obj2Height and
+           obj1.posY + obj1Height > coinY
+end
+
+-- Adicione estas funções ao LobosController (logo após a definição):
+function LobosController:init()
+    self.lobos = {}
+    self.tempoUltimoSpawn = 0
+    self.ondaAtual = 1  -- Reinicia a onda
+    self:gerarOndaLobos()  -- Remove o parâmetro
+end
+
+function LobosController:gerarOndaLobos(onda)
+    self.lobosParaSpawnar = {}
+    local quantidade = 3 + self.ondaAtual -- Aumenta a quantidade por onda
+    
+    for i = 1, quantidade do
+        table.insert(self.lobosParaSpawnar, {
+            tempo = (i-1) * 2, -- Spawna a cada 2 segundos
+            spawnado = false
+        })
+    end
+end
+
+function LobosController:update(dt, personagem)
+    -- Atualiza o tempo desde o último spawn
+    self.tempoUltimoSpawn = self.tempoUltimoSpawn + dt
+    
+    -- Conta lobos ativos (vivos)
+    local lobosAtivos = 0
+    for _, lobo in ipairs(self.lobos) do
+        if lobo.ativo and lobo.estado ~= "morte" then
+            lobosAtivos = lobosAtivos + 1
+        end
+    end
+
+    print("Lobos ativos:", #self.lobos, "Moedas ativas:", #self.coins)  -- DEBUG
+    
+    -- Verifica se pode spawnar um novo lobo
+    if self.tempoUltimoSpawn >= self.tempoEntreSpawns and lobosAtivos < self.maxLobosAtivos then
+        self:spawnLobo(personagem)
+        self.tempoUltimoSpawn = 0 -- Reinicia o contador
+    end
+    
+    -- Atualiza e remove lobos mortos
+    for i = #self.lobos, 1, -1 do
+        local lobo = self.lobos[i]
+        
+        if lobo.ativo then
+            -- Atualiza o lobo
+            lobo:update(dt, personagem)
+            
+            -- Remove se saiu da tela ou morreu
+            if lobo.x < (personagem.posX - love.graphics.getWidth() * 1.5) or 
+            (lobo.estado == "morte" and lobo.tempoMorte >= lobo.tempoParaDesaparecer) then
+             table.remove(self.lobos, i)
+            end
+        end
+    end
+
+    -- Atualiza e remove moedas coletadas
+        -- Atualiza e remove moedas coletadas
+        for i = #self.coins, 1, -1 do
+            local coin = self.coins[i]
+            if coin.active and not coin.collected then
+                coin:update(dt)
+                
+                -- Verifica colisão com o personagem
+                if checkCollision(personagem, coin) and coin.canBeCollected then  -- Só coleta se canBeCollected == true
+                    coin.collected = true
+                    personagem:addPower(coin.value)
+                    table.remove(self.coins, i)
+                end
+            end
+        end
+    end
+    
+
+
+
+function LobosController:spawnLobo(personagem)
+    local novoLobo = Lobo:new()
+    novoLobo:load()
+    
+    -- Aumenta stats conforme as ondas avançam
+    novoLobo.vida = 80 + (self.ondaAtual * 10)
+    novoLobo.velocidade = 120 + (self.ondaAtual * 5)
+    
+    -- Posição de spawn
+    novoLobo.x = personagem.posX + love.graphics.getWidth() + 50
+    novoLobo.y = 335
+    novoLobo.ativo = true
+    novoLobo.lobosController = self
+    
+    table.insert(self.lobos, novoLobo)
+    return novoLobo
+end
+
+function LobosController:verificarFimDeOnda()
+    if #self.lobos == 0 and #self.lobosParaSpawnar == 0 then
+        self.ondaAtual = self.ondaAtual + 1
+        self:gerarOndaLobos(self.ondaAtual)
+        return true
+    end
+    return false
+end
+
+function LobosController:draw(cameraX)
+    for _, lobo in ipairs(self.lobos) do
+        if lobo.ativo then
+            lobo:draw(cameraX)
+        end
+    end
+
+    -- Desenha moedas
+    for _, coin in ipairs(self.coins) do
+        coin:draw(cameraX)
+    end
+end
+
+function LobosController:getLobosAtivos()
+    local ativos = {}
+    for _, lobo in ipairs(self.lobos) do
+        if lobo.ativo and lobo.estado ~= "morte" then
+            table.insert(ativos, lobo)
+        end
+    end
+    return ativos
 end
 
 function Lobo:load()
@@ -392,104 +649,135 @@ function Lobo:load()
 
     self.imagemHurt = love.graphics.newImage("insumos/Sprite_Wolf/hurt.png")
     local hurt = anim.newGrid(64, 41, self.imagemHurt:getWidth(), self.imagemHurt:getHeight())
-    self.animacaoHurt = anim.newAnimation(hurt('1-'..math.floor(self.imagemHurt:getWidth() / 96), 1), 0.15)
+    self.animacaoHurt = anim.newAnimation(hurt('1-'..math.floor(self.imagemHurt:getWidth() / 64), 1), 0.15)
+
+    self.imagemDeath = love.graphics.newImage("insumos/Sprite_Wolf/death.png")
+    local death = anim.newGrid(65, 32, self.imagemDeath:getWidth(), self.imagemDeath:getHeight())
+    self.animacaoDeath = anim.newAnimation(death('1-'..math.floor(self.imagemDeath:getWidth() / 96), 1), 0.14)
 end
 
 function Lobo:tomarDano(dano)
-    if not self.podeTomarDano then 
-        print("Lobo invulnerável no momento")
+    if not self.podeTomarDano or self.estado == "morte" then 
         return 
     end
     
     self.vida = math.max(0, self.vida - dano)
-    print(string.format("Lobo tomou %d de dano! Vida restante: %d", dano, self.vida))
     
-    if self.vida > 0 then
+    if self.vida <= 0 then
+        self.estado = "morte"
+        self.tempoMorte = 0
+        self.animacaoDeath:gotoFrame(1)
+        print("Lobo derrotado!")
+
+        -- Spawna uma moeda quando o lobo morre
+        if self.lobosController then
+            self.lobosController:spawnCoin(self.x, self.y)
+        end
+    else
         self.estado = "hurt"
         self.animacaoHurt:gotoFrame(1)
         self.tempoHurt = 0.5
         self.podeTomarDano = false
-    else
-        print("LOBO DERROTADO!")
-        self.estado = "morte"
+    end
+
+    if self.vida <= 0 then
+        print("Lobo morrendo, tentando criar moeda...")
+        if self.lobosController then
+            print("Controlador encontrado, criando moeda em:", self.x, self.y)
+            self.lobosController:spawnCoin(self.x, self.y)
+        else
+            print("ERRO: Controlador de lobos não encontrado!")
+        end
     end
 end
 
 function Lobo:update(dt, personagem)
-    if self.estado == "morte" then return end
-
-    if not self.spawnado and personagem.posX > 300 then
-        self.spawnado = true
-        self.x = personagem.posX + 300
+    if self.estado == "morte" then
+        self.tempoMorte = self.tempoMorte + dt
+        self.animacaoDeath:update(dt)
+        return
     end
 
-    if self.spawnado then
-        -- Atualizar tempo de hurt
-        if self.estado == "hurt" then
-            self.tempoHurt = self.tempoHurt - dt
-            if self.tempoHurt <= 0 then
-                self.estado = "correr"
-                self.podeTomarDano = true
-            end
-            self.animacaoHurt:update(dt)
-            return
-        end
-
-        local distancia = math.abs(self.x - personagem.posX)
-    
-        if distancia > 60 then
-            self.x = self.x - 120 * dt
+    -- Estado hurt (quando leva dano)
+    if self.estado == "hurt" then
+        self.tempoHurt = self.tempoHurt - dt
+        if self.tempoHurt <= 0 then
             self.estado = "correr"
-            self.animacaoRun:update(dt)
-            self.direcao = false
-            self.tempoAtaque = 0
-        else
-            self.estado = "atacar"
-            self.animacaoAtaque:update(dt)
-            
-            if self.animacaoAtaque.position == 1 then
-                self.danoAplicado = false
-            end
-        
-            if self.animacaoAtaque.position == 3 and not self.danoAplicado then
-                self.danoAplicado = true
-        
-                if personagem.podeTomarDano and not (personagem.estado == "defender") then
-                    personagem.vida = personagem.vida - 15
-                    personagem.podeTomarDano = false
-                    personagem.tempoDano = personagem.tempoInvulnerabilidade
-                    personagem.estado = "dano"
-                elseif personagem.estado == "defender" then
-                    -- Defesa bem-sucedida
-                end
-                self.tempoAtaque = 0
-            end
+            self.podeTomarDano = true
         end
+        return
+    end
+
+    -- Movimento em direção ao personagem
+    local distancia = math.abs(self.x - personagem.posX)
+    
+    if distancia > 60 then
+        -- Persegue o personagem
+        self.x = self.x - self.velocidade * dt
+        self.estado = "correr"
+        self.direcao = false
+    else
+        -- Ataque quando está perto
+        self.estado = "atacar"
+        
+        -- Verifica frame de ataque
+        if self.animacaoAtaque.position == 3 and not self.danoAplicado then
+            self.danoAplicado = true
+            
+            -- Aplica dano se o personagem não estiver defendendo
+            if personagem.podeTomarDano and not personagem.defendendo then
+                personagem.vida = personagem.vida - 15
+                personagem.podeTomarDano = false
+                personagem.tempoDano = personagem.tempoInvulnerabilidade
+                personagem.estado = "dano"
+            end
+        elseif self.animacaoAtaque.position ~= 3 then
+            self.danoAplicado = false
+        end
+    end
+    
+    -- Atualiza animação
+    if self.estado == "correr" then
+        self.animacaoRun:update(dt)
+    elseif self.estado == "atacar" then
+        self.animacaoAtaque:update(dt)
     end
 end
 
 function Lobo:draw(cameraX)
-    if not self.spawnado or self.estado == "morte" then return end
+    if not self.ativo then return end
     
     local escalaX = self.direcao and 2 or -2
-        
-    if self.estado == "correr" then
-        self.animacaoRun:draw(self.imagemRun, self.x - cameraX, self.y, 0, escalaX, 2, 32, 0)
-    elseif self.estado == "atacar" then
-        self.animacaoAtaque:draw(self.imagemAtaque, self.x - cameraX, self.y, 0, escalaX, 2, 32, 0)
-    elseif self.estado == "hurt" then
-        self.animacaoHurt:draw(self.imagemHurt, self.x - cameraX, self.y, 0, escalaX, 2, 32, 0)
+    local offsetX = 30
+    local offsetY = 0
+    
+    if self.estado == "hurt" then
+        offsetY = -14  -- Ajuste este valor conforme necessário
     end
 
-    -- Barra de vida
-    local barraVidaX = self.x - cameraX - 20
-    local barraVidaY = self.y - 25
-    local barraVidaLargura = self.vida / 80 * 50
+    -- Desenha a animação apropriada
+    if self.estado == "morte" then
+        self.animacaoDeath:draw(self.imagemDeath, self.x - cameraX + offsetX, self.y + offsetY, 0, escalaX, 2, 32, 0)
+    elseif self.estado == "hurt" then
+        self.animacaoHurt:draw(self.imagemHurt, self.x - cameraX + offsetX, self.y + offsetY, 0, escalaX, 2, 32, 0)
+    elseif self.estado == "atacar" then
+        self.animacaoAtaque:draw(self.imagemAtaque, self.x - cameraX + offsetX, self.y + offsetY, 0, escalaX, 2, 32, 0)
+    else
+        self.animacaoRun:draw(self.imagemRun, self.x - cameraX + offsetX, self.y + offsetY, 0, escalaX, 2, 32, 0)
+    end
 
-    love.graphics.setColor(1, 0, 0) 
-    love.graphics.rectangle("fill", barraVidaX, barraVidaY, barraVidaLargura, 6)
-    love.graphics.setColor(1, 1, 1)
+    -- Barra de vida (só se não estiver morto)
+    if self.estado ~= "morte" then
+        local barraVidaX = self.x - cameraX - 20
+        local barraVidaY = self.y - 25
+        local barraVidaLargura = self.vida / 80 * 50
+
+        love.graphics.setColor(1, 0, 0) 
+        love.graphics.rectangle("fill", barraVidaX, barraVidaY, barraVidaLargura, 6)
+        love.graphics.setColor(1, 1, 1)
+    end
 end
+
 
 -- Classe do Jogo
 local Jogo = {}
@@ -499,13 +787,12 @@ function Jogo:new()
         larguraBg = 0,
         cameraX = 0,
         personagem = Personagem:new(),
-        lobo = Lobo:new()
+        lobosController = LobosController:new()
     }
+    o.personagem.lobosController = o.lobosController
     setmetatable(o, self)
     self.__index = self
-    
-    o.personagem.lobo = o.lobo
-    
+    o.lobosController:init()  -- Inicializa o controlador de lobos
     return o
 end
 
@@ -513,12 +800,17 @@ function Jogo:load()
     self.background = love.graphics.newImage("insumos/Background/background.png")
     self.larguraBg = self.background:getWidth()
     self.personagem:load()
-    self.lobo:load()
+    
+    -- Certifique-se de que o controlador de lobos é inicializado corretamente
+    if not self.lobosController then
+        self.lobosController = LobosController:new()
+    end
+    self.lobosController:init()
 end
 
 function Jogo:update(dt)
     self.personagem:update(dt)
-    self.lobo:update(dt, self.personagem)
+    self.lobosController:update(dt, self.personagem)
     self.cameraX = self.personagem.posX - love.graphics.getWidth() / 2
 end
 
@@ -529,27 +821,58 @@ function Jogo:draw()
         love.graphics.draw(self.background, startX + i * self.larguraBg, 0)
     end
 
-    -- Desenha os personagens
-    self.lobo:draw(self.cameraX)
+    -- Desenha os lobos e moedas
+    self.lobosController:draw(self.cameraX)
+    
+    -- Desenha o personagem
     self.personagem:draw(self.cameraX)
 
-    -- Barra de vida do personagem
-    love.graphics.setColor(0, 1, 0)
-    love.graphics.rectangle("fill", 10, 10, self.personagem.vida * 2, 20)
-    love.graphics.setColor(1, 1, 1)
+    if debugMode then
+        self:drawDebug()
+    end
+    
+    -- Debug: Verifica valores
+    print("Power:", self.personagem.power, "/", self.personagem.maxPower) -- Adicione esta linha
+    
+  
+    --fundo das barras de vida e poder
+    love.graphics.setFont(italicFont)
+
+    love.graphics.setColor(1,1,1,0.5)
+    love.graphics.rectangle("fill", 7, 5, self.personagem.vida * 2.2, 86)
+
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.print("Life", 13, 7)
+
+    -- Barra de vida (verde)
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.rectangle("fill", 10, 25, self.personagem.vida * 2, 25)
+    love.graphics.setColor(0, 1, 0) 
+    love.graphics.rectangle("fill", 10, 25, self.personagem.vida * 2, 25)
+
+    -- escrito da barra de poder
+    love.graphics.setColor(0, 0, 0) 
+    love.graphics.print("Power", 10, 50)
+
+    -- Barra de poder (azul)
+    love.graphics.setColor(0, 0, 0) 
+    love.graphics.rectangle("fill", 10, 65, self.personagem.maxPower * 2, 20)
+    love.graphics.setColor(0, 0.67, 1, 1)
+    love.graphics.rectangle("fill", 10, 65, self.personagem.power * 2, 20)
+    
+    love.graphics.setColor(1, 1, 1) 
 
     -- Debug info
-    love.graphics.print("Estado Personagem: " .. self.personagem.estado, 10, 40)
-    love.graphics.print("Estado Lobo: " .. self.lobo.estado, 10, 60)
-    love.graphics.print("Vida Lobo: " .. self.lobo.vida, 10, 80)
-
-    self:drawDebug() 
+    love.graphics.print("Estado: " .. self.personagem.estado, 10, 70)
+    love.graphics.print("Lobos: " .. #self.lobosController:getLobosAtivos(), 10, 90)
+    love.graphics.print("Spawn: " .. math.floor(self.lobosController.tempoEntreSpawns - self.lobosController.tempoUltimoSpawn) .. "s", 10, 110)
+    love.graphics.print("Power: " .. self.personagem.power .. "/" .. self.personagem.maxPower, 10, 130)
 end
 
 -- Funções para o menu
 function loadMenu()
     backgroundMenu = love.graphics.newImage("insumos/BackgroundMenu/menu2.png") 
-    musicMenu = love.audio.newSource("insumos/SondsTrack/ForestTheme.mp3", "stream")
+    musicMenu = love.audio.newSource("insumos/SondsTrack/menuMusic.mp3", "stream")
     musicMenu:setLooping(true)
     musicMenu:play()
 
@@ -604,7 +927,7 @@ function drawMenu()
         love.graphics.rectangle("fill", button.x, button.y, button.width, button.height, 10)
         
         -- Texto vermelho (apenas aqui)
-        love.graphics.setColor(1, 0, 0)  -- Vermelho
+        love.graphics.setColor(1, 1, 1)  -- Vermelho
         love.graphics.printf(button.text, button.x, button.y + button.height/2 - 15, button.width, "center")
         
         -- Resetar cor para branco após desenhar o texto
@@ -658,9 +981,15 @@ end
 
 function love.load()
     loadMenu()
-    jogo = Jogo:new()
+    jogo = Jogo:new()   
     jogo:load()
     deathSound:stop()
+    -- Carrega o som da moeda (adicione esta linha)
+    coinSound = love.audio.newSource("insumos/SondsTrack/powerUp.mp3", "static")
+    if not coinSound then
+        print("ERRO: Não foi possível carregar o som da moeda!")
+    end
+
 end
 
 function love.update(dt)
@@ -746,30 +1075,40 @@ function Jogo:drawDebug()
     -- Hitbox do ataque do personagem
     if jogo.personagem:estaAtacando() and jogo.personagem:frameDeDano() then
         local p = jogo.personagem
-        local ataqueLargura = 100
-        local ataqueAltura = 150
-        local ataqueOffsetX = p.direcao and 60 or -60
-        local ataqueX = p.posX + ataqueOffsetX - jogo.cameraX
-        local ataqueY = p.posY - 20
-        
+        local ataqueLargura = 120
+        local ataqueAltura = 80
+        local ataqueOffsetX = p.direcao and 80 or -80
+        local ataqueX = p.posX + ataqueOffsetX - ataqueLargura/2 - self.cameraX
+        local ataqueY = p.posY + 180  -- Mesmo valor usado na colisão
+
         love.graphics.setColor(1, 0, 0, 0.5)
         love.graphics.rectangle("fill", ataqueX, ataqueY, ataqueLargura, ataqueAltura)
     end
     
-    -- Hitbox do lobo
-    if jogo.lobo.spawnado and jogo.lobo.estado ~= "morte" then
-        local l = jogo.lobo
-        local loboLargura = 60
-        local loboAltura = 40
-        local loboX = l.x - jogo.cameraX
-        local loboY = l.y + 30
-        
-        love.graphics.setColor(0, 1, 0, 0.5)
-        love.graphics.rectangle("fill", loboX, loboY, loboLargura, loboAltura)
+    -- Hitbox dos lobos
+    for _, lobo in ipairs(self.lobosController.lobos) do
+        if lobo.ativo and lobo.estado ~= "morte" then
+            local loboLargura = 80
+            local loboAltura = 60
+            local loboX = lobo.x - loboLargura/2 + 30 - self.cameraX  -- Mesmo offset da colisão
+            local loboY = lobo.y - 10  -- Mesmo offset da colisão
+
+            love.graphics.setColor(0, 1, 0, 0.5)
+            love.graphics.rectangle("fill", loboX, loboY, loboLargura, loboAltura)
+        end
     end
     love.graphics.setColor(1, 1, 1)
 end
 
+function love.keypressed(key)
+    if currentGameState == gameStates.PLAYING then
+        if key == "e" and not jogo.personagem:estaAtacando() and not jogo.personagem.defendendo then
+            jogo.personagem.estado = "atacar2"
+            jogo.personagem.animacaoAtaque2:gotoFrame(1)
+            jogo.personagem.danoAplicado = false
+        end
+    end
+end
 
 
 -- PROXIMOS PASSOS:
